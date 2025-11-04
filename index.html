@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NBOX Uploader</title>
+    <!-- Подключение Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Используем Inter как основной шрифт */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Стилизация для спиннера загрузки */
+        .loader {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen p-4 py-8">
+
+    <div class="bg-gray-800 p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-2xl">
+        
+        <h1 class="text-2xl font-bold mb-6 text-center text-white">
+            Загрузчик на NBOX
+        </h1>
+
+        <!-- Форма загрузки -->
+        <form id="uploadForm" class="space-y-4">
+            
+            <!-- Кастомный инпут для файлов -->
+            <div>
+                <label for="fileInput" class="block w-full p-6 text-center bg-gray-700 hover:bg-gray-600 rounded-lg cursor-pointer transition-colors duration-200">
+                    <span id="file-chosen-text" class="text-gray-300">Нажмите, чтобы выбрать файлы</span>
+                </label>
+                <input 
+                    type="file" 
+                    id="fileInput" 
+                    multiple 
+                    class="hidden"
+                >
+            </div>
+
+            <!-- Поле для комментария (Очищаемое) -->
+            <div>
+                <label for="transientCommentInput" class="block text-sm font-medium text-gray-300 mb-2">Описание (очищается)</label>
+                <input 
+                    type="text" 
+                    id="transientCommentInput" 
+                    placeholder="Например: 'Фото с этого ракурса'" 
+                    class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+            </div>
+
+            <!-- Поле для комментария (Сохраняемое) -->
+            <div>
+                <label for="persistentCommentInput" class="block text-sm font-medium text-gray-300 mb-2">Общее описание (сохраняется)</label>
+                <input 
+                    type="text" 
+                    id="persistentCommentInput" 
+                    placeholder="Например: 'Проверка объекта X'" 
+                    class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+            </div>
+
+            <!-- Кнопка GPS и статус -->
+            <div>
+                <button 
+                    type="button" 
+                    id="getLocationBtn"
+                    class="w-full p-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium transition-colors duration-200"
+                >
+                    Получить GPS
+                </button>
+                <span id="locationStatus" class="block text-sm text-gray-400 mt-2 text-center">Адрес не получен</span>
+            </div>
+
+
+            <!-- Кнопка "Загрузить" -->
+            <button 
+                type="submit" 
+                id="uploadButton" 
+                class="w-full flex items-center justify-center p-4 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 disabled:bg-gray-500 disabled:cursor-not-allowed"
+            >
+                <!-- Спиннер (появится при загрузке) -->
+                <div id="loader" class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-6 w-6 mr-3 hidden"></div>
+                <span>Загрузить</span>
+            </button>
+
+        </form>
+
+        <!-- Контейнер для вывода результата (список) -->
+        <div id="resultsContainer" class="mt-8 hidden">
+            <h2 class="text-xl font-semibold text-green-400 mb-4">История загрузок</h2>
+            <div id="linksList" class="bg-gray-900 p-4 rounded-lg space-y-4">
+                <!-- Записи будут вставлены сюда -->
+            </div>
+        </div>
+
+        <!-- Контейнер для вывода ошибок -->
+        <div id="errorContainer" class="mt-6 p-4 bg-red-900 border border-red-700 rounded-lg text-red-300 hidden">
+            <h2 class="font-bold mb-2">Ошибка загрузки</h2>
+            <p id="errorText"></p>
+        </div>
+
+    </div>
+
+    <script>
+        // === КОНФИГУРАЦИЯ ===
+        const NBOX_UPLOAD_URL = "https://ninjabox.org/put";
+
+        // === ГЛОБАЛЬНОЕ СОСТОЯНИЕ ===
+        let uploadHistory = []; // Массив для хранения истории
+        let currentUploadId = 0; // Счетчик ID
+        let currentLocation = null; // { latitude, longitude }
+
+        // === DOM-ЭЛЕМЕНТЫ ===
+        const uploadForm = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const uploadButton = document.getElementById('uploadButton');
+        const loader = document.getElementById('loader');
+        const fileChosenText = document.getElementById('file-chosen-text');
+        
+        const transientCommentInput = document.getElementById('transientCommentInput'); // Переименовано
+        const persistentCommentInput = document.getElementById('persistentCommentInput'); // Добавлено
+        const getLocationBtn = document.getElementById('getLocationBtn');
+        const locationStatus = document.getElementById('locationStatus');
+        // const clearCommentCheckbox = document.getElementById('clearCommentCheckbox'); // Удалено
+
+        const resultsContainer = document.getElementById('resultsContainer');
+        const linksList = document.getElementById('linksList');
+        
+        const errorContainer = document.getElementById('errorContainer');
+        const errorText = document.getElementById('errorText');
+
+        // === ОБРАБОТЧИКИ СОБЫТИЙ ===
+
+        // Обновление текста при выборе файлов
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length === 0) {
+                fileChosenText.textContent = 'Нажмите, чтобы выбрать файлы';
+            } else if (fileInput.files.length === 1) {
+                fileChosenText.textContent = fileInput.files[0].name;
+            } else {
+                fileChosenText.textContent = `${fileInput.files.length} файлов выбрано`;
+            }
+        });
+
+        // Получение GPS
+        getLocationBtn.addEventListener('click', () => {
+            if (!navigator.geolocation) {
+                locationStatus.textContent = 'GPS не поддерживается вашим браузером.';
+                locationStatus.classList.add('text-red-400');
+                return;
+            }
+            
+            locationStatus.textContent = 'Запрос GPS...';
+            locationStatus.classList.remove('text-red-400', 'text-green-400');
+            
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    currentLocation = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    locationStatus.textContent = `Адрес получен: ${currentLocation.latitude.toFixed(4)}, ${currentLocation.longitude.toFixed(4)}`;
+                    locationStatus.classList.add('text-green-400');
+                },
+                (error) => {
+                    currentLocation = null;
+                    locationStatus.textContent = `Ошибка GPS: ${error.message}`;
+                    locationStatus.classList.add('text-red-400');
+                }
+            );
+        });
+
+        // Отправка формы
+        uploadForm.addEventListener('submit', async (event) => {
+            event.preventDefault(); 
+            const files = fileInput.files;
+            
+            if (files.length === 0) {
+                showError('Файлы не выбраны.');
+                return;
+            }
+
+            setLoadingState(true);
+
+            const formData = new FormData();
+            formData.append("protect", "off");
+            formData.append("delete", "off");
+            formData.append("password", "");
+            formData.append("quantity", ""); 
+
+            for (let i = 0; i < files.length; i++) {
+                formData.append("files", files[i], files[i].name);
+            }
+
+            try {
+                const response = await fetch(NBOX_UPLOAD_URL, {
+                    method: 'POST',
+                    body: formData,
+                    redirect: 'follow'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const resultUrl = response.url;
+                
+                // --- Формирование комбинированного комментария ---
+                const transientComment = transientCommentInput.value.trim() || '';
+                const persistentComment = persistentCommentInput.value.trim() || '';
+                let combinedComment = '';
+
+                if (persistentComment) {
+                    combinedComment += `[Общее]: ${persistentComment}`;
+                }
+                if (transientComment) {
+                    combinedComment += (persistentComment ? ' | ' : '') + `[Разовое]: ${transientComment}`;
+                }
+                if (!combinedComment) {
+                    combinedComment = 'Нет описания';
+                }
+                // ---
+                
+                // Добавляем в историю
+                currentUploadId++;
+                const newUpload = {
+                    id: currentUploadId,
+                    url: resultUrl,
+                    comment: combinedComment, // Используем комбинированный
+                    location: currentLocation 
+                        ? `${currentLocation.latitude.toFixed(4)}, ${currentLocation.longitude.toFixed(4)}` 
+                        : 'Нет адреса'
+                };
+                
+                uploadHistory.unshift(newUpload); // Добавляем в начало массива
+                renderHistory(); // Перерисовываем список
+                
+                // Сбрасываем поля
+                fileInput.value = ''; // Очистка <input type="file">
+                fileChosenText.textContent = 'Нажмите, чтобы выбрать файлы';
+                
+                // Очищаем только разовый комментарий
+                transientCommentInput.value = '';
+                // persistentCommentInput.value НЕ очищается
+
+            } catch (error) {
+                console.error('Upload failed:', error);
+                showError(error.message || 'Произошла неизвестная ошибка сети.');
+            } finally {
+                setLoadingState(false);
+            }
+        });
+        
+        // === РЕНДЕРИНГ И УПРАВЛЕНИЕ UI ===
+
+        // Функция перерисовки списка истории
+        function renderHistory() {
+            if (uploadHistory.length === 0) {
+                resultsContainer.classList.add('hidden');
+                return;
+            }
+
+            linksList.innerHTML = ''; // Очищаем старый список
+
+            uploadHistory.forEach(item => {
+                const itemEl = document.createElement('div');
+                itemEl.className = 'bg-gray-800 p-4 rounded-lg border border-gray-700';
+                itemEl.setAttribute('data-id', item.id);
+                
+                itemEl.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="text-sm font-bold text-blue-400">#${item.id}</span>
+                        <div class="flex space-x-2">
+                            <button class="edit-btn text-yellow-400 hover:text-yellow-300 text-sm" data-id="${item.id}">Изменить</button>
+                            <button class="delete-btn text-red-400 hover:text-red-300 text-sm" data-id="${item.id}">Удалить</button>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-300 mb-1 break-all">
+                        <strong class="text-gray-100">URL:</strong> 
+                        <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">${item.url}</a>
+                    </p>
+                    <p class="text-sm text-gray-300 mb-1">
+                        <strong class="text-gray-100">Описание:</strong> 
+                        <span class="comment-text">${item.comment}</span>
+                    </p>
+                    <p class="text-sm text-gray-300">
+                        <strong class="text-gray-100">Адрес:</strong> 
+                        <span class="location-text">${item.location}</span>
+                    </p>
+                `;
+                linksList.appendChild(itemEl);
+            });
+
+            resultsContainer.classList.remove('hidden');
+
+            // Навешиваем обработчики на новые кнопки
+            document.querySelectorAll('.delete-btn').forEach(btn => 
+                btn.addEventListener('click', handleDelete)
+            );
+            document.querySelectorAll('.edit-btn').forEach(btn => 
+                btn.addEventListener('click', handleEdit)
+            );
+        }
+
+        // Удаление
+        function handleDelete(event) {
+            const id = parseInt(event.target.dataset.id);
+            uploadHistory = uploadHistory.filter(item => item.id !== id);
+            renderHistory(); // Перерисовать
+        }
+
+        // Редактирование (используем prompt для простоты)
+        function handleEdit(event) {
+            const id = parseInt(event.target.dataset.id);
+            const item = uploadHistory.find(item => item.id === id);
+            
+            const currentComment = item.comment;
+            const newComment = prompt('Введите новое описание:', currentComment);
+
+            if (newComment !== null && newComment.trim() !== '') {
+                item.comment = newComment.trim();
+                renderHistory(); // Перерисовать
+            } else if (newComment !== null) {
+                item.comment = 'Нет описания';
+                renderHistory(); // Перерисовать
+            }
+        }
+
+        // Управление состоянием загрузки
+        function setLoadingState(isLoading) {
+            if (isLoading) {
+                uploadButton.disabled = true;
+                loader.classList.remove('hidden');
+                uploadButton.querySelector('span').textContent = 'Загрузка...';
+                errorContainer.classList.add('hidden');
+            } else {
+                uploadButton.disabled = false;
+                loader.classList.add('hidden');
+                uploadButton.querySelector('span').textContent = 'Загрузить';
+            }
+        }
+
+        // Показ ошибки
+        function showError(message) {
+            errorText.textContent = message;
+            errorContainer.classList.remove('hidden');
+            resultsContainer.classList.add('hidden'); // Скрываем результаты при ошибке
+        }
+    </script>
+</body>
+</html>
+
